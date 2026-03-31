@@ -136,14 +136,21 @@ update_framework_mac() {
 
 verify_framework_mac() {
     local mac_coloned="$1"
-    local factory_mac
-    factory_mac=$(dumpsys wifi | grep wifi_sta_factory_mac_address | \
-        sed 's/.*=//' | tr '[:upper:]' '[:lower:]') || return 1
     local expected_lower
     expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
-    if [ "$factory_mac" = "$expected_lower" ]; then
-        return 0
-    fi
+
+    # Retry a few times — dumpsys wifi may briefly fail after framework restart
+    local attempt=0
+    while [ $attempt -lt 5 ]; do
+        local factory_mac
+        factory_mac=$(dumpsys wifi 2>/dev/null | grep wifi_sta_factory_mac_address | \
+            sed 's/.*=//' | tr '[:upper:]' '[:lower:]')
+        if [ "$factory_mac" = "$expected_lower" ]; then
+            return 0
+        fi
+        sleep 2
+        attempt=$((attempt + 1))
+    done
     echo "$factory_mac"
     return 1
 }
