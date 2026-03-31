@@ -116,6 +116,57 @@ verify_interface_mac() {
     return 1
 }
 
+wifi_connect_test() {
+    local ssid="$1"
+    local password="$2"
+
+    # Enable WiFi
+    adb shell "cmd wifi set-wifi-enabled enabled" || return 1
+    sleep 2
+
+    # Connect to test AP
+    adb shell "cmd wifi connect-network \"${ssid}\" wpa2 \"${password}\"" || return 1
+
+    # Wait for connection
+    local elapsed=0
+    while [[ $elapsed -lt $WIFI_CONNECT_TIMEOUT ]]; do
+        local status
+        status=$(adb shell "cmd wifi status" 2>/dev/null | tr -d '\r')
+        if echo "$status" | grep -q "CONNECTED"; then
+            break
+        fi
+        sleep 1
+        ((elapsed++))
+    done
+
+    if [[ $elapsed -ge $WIFI_CONNECT_TIMEOUT ]]; then
+        wifi_cleanup "$ssid"
+        return 1
+    fi
+
+    # Check IP
+    local ip
+    ip=$(adb shell "ip addr show ${WLAN_INTERFACE}" | grep "inet " | awk '{print $2}' | cut -d/ -f1 | tr -d '\r')
+
+    if [[ -z "$ip" ]]; then
+        wifi_cleanup "$ssid"
+        echo "NONE"
+        return 1
+    fi
+
+    echo "$ip"
+
+    # Cleanup
+    wifi_cleanup "$ssid"
+    return 0
+}
+
+wifi_cleanup() {
+    local ssid="$1"
+    adb shell "cmd wifi forget-network \"${ssid}\"" 2>/dev/null || true
+    adb shell "cmd wifi set-wifi-enabled disabled" 2>/dev/null || true
+}
+
 # --- Source-only guard ---
 # When sourced with --source-only, only export functions (for testing)
 if [[ "${1:-}" == "--source-only" ]]; then
