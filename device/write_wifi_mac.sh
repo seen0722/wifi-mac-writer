@@ -42,6 +42,69 @@ output_result() {
     echo "${key}=${value}"
 }
 
+write_mac_to_device() {
+    local mac_normalized="$1"
+    local content="Intf0MacAddress=${mac_normalized}"
+    echo "${content}" > "${MAC_FILE_PATH}" || return 1
+    return 0
+}
+
+verify_mac_written() {
+    local mac_normalized="$1"
+    local expected="Intf0MacAddress=${mac_normalized}"
+    local actual
+    actual=$(cat "${MAC_FILE_PATH}") || return 1
+    if [ "$actual" = "$expected" ]; then
+        return 0
+    fi
+    echo "$actual"
+    return 1
+}
+
+reload_wlan_driver() {
+    if ! rmmod wlan 2>/dev/null; then
+        ifconfig ${WLAN_INTERFACE} down 2>/dev/null || true
+        rmmod wlan || return 1
+    fi
+
+    sleep "$DRIVER_RELOAD_WAIT"
+
+    insmod "${WLAN_MODULE_PATH}" || return 1
+    return 0
+}
+
+wait_for_wlan_interface() {
+    local elapsed=0
+    while [ $elapsed -lt $WLAN_UP_TIMEOUT ]; do
+        if ip link show ${WLAN_INTERFACE} >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    return 1
+}
+
+get_interface_mac() {
+    local mac
+    mac=$(cat /sys/class/net/${WLAN_INTERFACE}/address) || return 1
+    echo "$mac"
+}
+
+verify_interface_mac() {
+    local mac_normalized="$1"
+    local interface_mac
+    interface_mac=$(get_interface_mac) || return 1
+    local interface_normalized
+    interface_normalized=$(normalize_mac "$interface_mac")
+    if [ "$interface_normalized" = "$mac_normalized" ]; then
+        echo "$interface_mac"
+        return 0
+    fi
+    echo "$interface_mac"
+    return 1
+}
+
 # --- Source-only guard (for testing on host) ---
 if [ "${1:-}" = "--source-only" ]; then
     return 0 2>/dev/null || exit 0
