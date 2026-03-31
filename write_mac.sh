@@ -12,6 +12,8 @@ readonly WLAN_INTERFACE="wlan0"
 readonly DRIVER_RELOAD_WAIT=1
 readonly WLAN_UP_TIMEOUT=10
 readonly WIFI_CONNECT_TIMEOUT=15
+readonly WIFI_CONFIG_STORE="/data/misc/apexdata/com.android.wifi/WifiConfigStore.xml"
+readonly FRAMEWORK_RESTART_WAIT=10
 
 # --- Helper Functions ---
 
@@ -167,6 +169,52 @@ wifi_cleanup() {
     adb shell "cmd wifi set-wifi-enabled disabled" 2>/dev/null || true
 }
 
+update_framework_mac() {
+    local mac_coloned="$1"
+    # Update wifi_sta_factory_mac_address in WifiConfigStore.xml
+    local old_mac
+    old_mac=$(adb shell "grep 'wifi_sta_factory_mac_address' ${WIFI_CONFIG_STORE}" | \
+        sed 's/.*>\(.*\)<.*/\1/' | tr -d '\r') || return 1
+
+    if [[ -z "$old_mac" ]]; then
+        return 1
+    fi
+
+    adb shell "sed -i 's/${old_mac}/${mac_coloned}/g' ${WIFI_CONFIG_STORE}" || return 1
+
+    # Restart Android framework to reload the config
+    adb shell "stop; start" || return 1
+
+    # Wait for ADB to reconnect after framework restart
+    adb wait-for-device 2>/dev/null || true
+    sleep "$FRAMEWORK_RESTART_WAIT"
+
+    # Ensure ADB is fully ready
+    local retries=0
+    while [[ $retries -lt 5 ]]; do
+        if adb shell "getprop sys.boot_completed" 2>/dev/null | grep -q "1"; then
+            break
+        fi
+        sleep 2
+        ((retries++))
+    done
+    return 0
+}
+
+verify_framework_mac() {
+    local mac_coloned="$1"
+    local factory_mac
+    factory_mac=$(adb shell "dumpsys wifi | grep wifi_sta_factory_mac_address" | \
+        sed 's/.*=//' | tr -d '\r' | tr '[:upper:]' '[:lower:]') || return 1
+    local expected_lower
+    expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
+    if [[ "$factory_mac" == "$expected_lower" ]]; then
+        return 0
+    fi
+    echo "$factory_mac"
+    return 1
+}
+
 # --- Source-only guard ---
 # When sourced with --source-only, only export functions (for testing)
 # shellcheck disable=SC2317
@@ -260,7 +308,25 @@ main() {
     }
     output_result "MAC_INTERFACE" "$interface_mac"
 
-    # Step 8: WiFi connection test (optional)
+    # Step 8: Update framework factory MAC in WifiConfigStore.xml
+    local mac_coloned
+    mac_coloned=$(echo "$mac_normalized" | sed 's/\(..\)/\1:/g; s/:$//' | tr '[:upper:]' '[:lower:]')
+    if ! update_framework_mac "$mac_coloned"; then
+        output_result "FRAMEWORK_MAC" "FAIL"
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "Failed to update WifiConfigStore.xml"
+        exit 8
+    fi
+
+    if ! verify_framework_mac "$mac_coloned"; then
+        output_result "FRAMEWORK_MAC" "FAIL"
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "Framework factory MAC verification failed"
+        exit 8
+    fi
+    output_result "FRAMEWORK_MAC" "PASS"
+
+    # Step 9: WiFi connection test (optional)
     if [[ -n "$test_ssid" && -n "$test_password" ]]; then
         local ip
         ip=$(wifi_connect_test "$test_ssid" "$test_password") || {
@@ -268,7 +334,7 @@ main() {
             output_result "IP_OBTAINED" "NONE"
             output_result "RESULT" "FAIL"
             output_result "ERROR" "WiFi connection test failed"
-            exit 7
+            exit 9
         }
         output_result "WIFI_CONNECT" "PASS"
         output_result "IP_OBTAINED" "$ip"
