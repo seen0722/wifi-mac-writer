@@ -7,7 +7,7 @@ set -euo pipefail
 
 # shellcheck disable=SC2034 # Constants used by functions in Tasks 2-5
 readonly MAC_FILE_PATH="/mnt/vendor/persist/qca6750/wlan_mac.bin"
-readonly WLAN_MODULE_PATH="/vendor/lib/modules/wlan.ko"
+readonly WLAN_MODULE_PATH="/vendor/lib/modules/qca_cld3_qca6750.ko"
 readonly WLAN_INTERFACE="wlan0"
 readonly DRIVER_RELOAD_WAIT=1
 readonly WLAN_UP_TIMEOUT=10
