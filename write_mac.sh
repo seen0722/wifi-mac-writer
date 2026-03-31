@@ -169,8 +169,9 @@ wifi_cleanup() {
 
 # --- Source-only guard ---
 # When sourced with --source-only, only export functions (for testing)
+# shellcheck disable=SC2317
 if [[ "${1:-}" == "--source-only" ]]; then
-    return 0 2>/dev/null || exit 0 # shellcheck disable=SC2317
+    return 0 2>/dev/null || exit 0
 fi
 
 # --- Output helpers ---

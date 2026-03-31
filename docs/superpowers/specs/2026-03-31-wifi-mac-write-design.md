@@ -124,6 +124,11 @@ write_mac.sh <MAC_ADDRESS> [TEST_AP_SSID] [TEST_AP_PASSWORD]
 - 生產線需部署專用測試 AP
 - 測試完成後清除連線紀錄，避免出貨時殘留
 
+## 已知限制
+
+- **Locally Administered Bit：** QCA6750 驅動會清除 MAC 第一個 byte 的 bit 1（IEEE locally administered bit）。從 OUI block 分配的正式 MAC 不受影響（bit 1 本來就是 0），但若使用 `AA:BB:CC:DD:EE:FF` 等測試地址可能導致驗證失敗。
+- **wlan module 路徑：** 實際模組路徑為 `/vendor/lib/modules/qca_cld3_qca6750.ko`，非通用的 `wlan.ko`。不同 BSP 版本可能路徑不同。
+
 ## 輸出格式
 
 腳本輸出 key=value 格式到 stdout，供管理系統解析：
