@@ -70,6 +70,52 @@ verify_mac_written() {
     return 1
 }
 
+reload_wlan_driver() {
+    # Try rmmod; if it fails, bring interface down first
+    if ! adb shell "rmmod wlan" 2>/dev/null; then
+        adb shell "ifconfig ${WLAN_INTERFACE} down" 2>/dev/null || true
+        adb shell "rmmod wlan" || return 1
+    fi
+
+    sleep "$DRIVER_RELOAD_WAIT"
+
+    adb shell "insmod ${WLAN_MODULE_PATH}" || return 1
+    return 0
+}
+
+wait_for_wlan_interface() {
+    local elapsed=0
+    while [[ $elapsed -lt $WLAN_UP_TIMEOUT ]]; do
+        if adb shell "ip link show ${WLAN_INTERFACE}" &>/dev/null; then
+            return 0
+        fi
+        sleep 1
+        ((elapsed++))
+    done
+    return 1
+}
+
+get_interface_mac() {
+    local mac
+    mac=$(adb shell "cat /sys/class/net/${WLAN_INTERFACE}/address" | tr -d '\r') || return 1
+    echo "$mac"
+}
+
+verify_interface_mac() {
+    local mac_normalized="$1"
+    local interface_mac
+    interface_mac=$(get_interface_mac) || return 1
+    # Convert interface MAC (aa:bb:cc:dd:ee:ff) to normalized form for comparison
+    local interface_normalized
+    interface_normalized=$(normalize_mac "$interface_mac")
+    if [[ "$interface_normalized" == "$mac_normalized" ]]; then
+        echo "$interface_mac"
+        return 0
+    fi
+    echo "$interface_mac"
+    return 1
+}
+
 # --- Source-only guard ---
 # When sourced with --source-only, only export functions (for testing)
 if [[ "${1:-}" == "--source-only" ]]; then
