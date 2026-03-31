@@ -5,6 +5,7 @@
 
 set -euo pipefail
 
+# shellcheck disable=SC2034 # Constants used by functions in Tasks 2-5
 readonly MAC_FILE_PATH="/mnt/vendor/persist/qca6750/wlan_mac.bin"
 readonly WLAN_MODULE_PATH="/vendor/lib/modules/wlan.ko"
 readonly WLAN_INTERFACE="wlan0"
@@ -34,5 +35,5 @@ normalize_mac() {
 # --- Source-only guard ---
 # When sourced with --source-only, only export functions (for testing)
 if [[ "${1:-}" == "--source-only" ]]; then
-    return 0 2>/dev/null || exit 0
+    return 0 2>/dev/null || exit 0 # shellcheck disable=SC2317
 fi
