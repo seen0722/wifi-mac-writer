@@ -105,6 +105,94 @@ verify_interface_mac() {
     return 1
 }
 
+update_framework_mac() {
+    local mac_coloned="$1"
+    local old_mac
+    old_mac=$(grep 'wifi_sta_factory_mac_address' "${WIFI_CONFIG_STORE}" | \
+        sed 's/.*>\(.*\)<.*/\1/') || return 1
+
+    if [ -z "$old_mac" ]; then
+        return 1
+    fi
+
+    sed -i "s/${old_mac}/${mac_coloned}/g" "${WIFI_CONFIG_STORE}" || return 1
+
+    # Restart Android framework
+    stop
+    start
+
+    # Wait for framework to be ready (local polling, no ADB needed)
+    local retries=0
+    while [ $retries -lt 30 ]; do
+        if getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
+            break
+        fi
+        sleep 1
+        retries=$((retries + 1))
+    done
+    sleep "$FRAMEWORK_RESTART_WAIT"
+    return 0
+}
+
+verify_framework_mac() {
+    local mac_coloned="$1"
+    local factory_mac
+    factory_mac=$(dumpsys wifi | grep wifi_sta_factory_mac_address | \
+        sed 's/.*=//' | tr '[:upper:]' '[:lower:]') || return 1
+    local expected_lower
+    expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
+    if [ "$factory_mac" = "$expected_lower" ]; then
+        return 0
+    fi
+    echo "$factory_mac"
+    return 1
+}
+
+wifi_connect_test() {
+    local ssid="$1"
+    local password="$2"
+
+    cmd wifi set-wifi-enabled enabled || return 1
+    sleep 2
+
+    cmd wifi connect-network "${ssid}" wpa2 "${password}" || return 1
+
+    local elapsed=0
+    while [ $elapsed -lt $WIFI_CONNECT_TIMEOUT ]; do
+        local wifi_status
+        wifi_status=$(cmd wifi status 2>/dev/null)
+        if echo "$wifi_status" | grep -q "CONNECTED"; then
+            break
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    if [ $elapsed -ge $WIFI_CONNECT_TIMEOUT ]; then
+        wifi_cleanup "$ssid"
+        return 1
+    fi
+
+    local ip
+    ip=$(ip addr show ${WLAN_INTERFACE} | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+
+    if [ -z "$ip" ]; then
+        wifi_cleanup "$ssid"
+        echo "NONE"
+        return 1
+    fi
+
+    echo "$ip"
+    wifi_cleanup "$ssid"
+    return 0
+}
+
+wifi_cleanup() {
+    local ssid="$1"
+    cmd wifi forget-network "${ssid}" 2>/dev/null || true
+    cmd wifi set-wifi-enabled disabled 2>/dev/null || true
+}
+
 # --- Source-only guard (for testing on host) ---
 if [ "${1:-}" = "--source-only" ]; then
     return 0 2>/dev/null || exit 0
