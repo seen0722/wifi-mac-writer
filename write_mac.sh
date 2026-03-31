@@ -172,3 +172,113 @@ wifi_cleanup() {
 if [[ "${1:-}" == "--source-only" ]]; then
     return 0 2>/dev/null || exit 0 # shellcheck disable=SC2317
 fi
+
+# --- Output helpers ---
+
+output_result() {
+    local key="$1"
+    local value="$2"
+    echo "${key}=${value}"
+}
+
+# --- Main ---
+
+main() {
+    local mac_input="${1:-}"
+    local test_ssid="${2:-}"
+    local test_password="${3:-}"
+
+    # Step 1: Validate MAC
+    if [[ -z "$mac_input" ]]; then
+        echo "Usage: $0 <MAC_ADDRESS> [TEST_AP_SSID] [TEST_AP_PASSWORD]" >&2
+        exit 2
+    fi
+
+    if ! validate_mac "$mac_input"; then
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "Invalid MAC format: ${mac_input}"
+        exit 2
+    fi
+
+    local mac_normalized
+    mac_normalized=$(normalize_mac "$mac_input")
+
+    # Step 2: Check ADB
+    local serial
+    serial=$(check_adb_connection) || {
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "ADB connection failed"
+        exit 1
+    }
+    output_result "SERIAL" "$serial"
+    output_result "MAC_WRITTEN" "$mac_normalized"
+
+    # Step 3: Backup original MAC
+    backup_original_mac "$serial" >/dev/null
+
+    # Step 4: Write MAC
+    if ! write_mac_to_device "$mac_normalized"; then
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "Failed to write MAC file"
+        exit 3
+    fi
+
+    # Step 5: Read-back verify
+    local verify_output
+    if ! verify_output=$(verify_mac_written "$mac_normalized"); then
+        output_result "MAC_READBACK" "MISMATCH"
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "Read-back verification failed: ${verify_output}"
+        exit 4
+    fi
+    output_result "MAC_READBACK" "$mac_normalized"
+
+    # Step 6: Reload driver
+    if ! reload_wlan_driver; then
+        output_result "DRIVER_RELOAD" "FAIL"
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "Driver reload failed"
+        exit 5
+    fi
+
+    if ! wait_for_wlan_interface; then
+        output_result "DRIVER_RELOAD" "FAIL"
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "wlan0 interface did not appear within ${WLAN_UP_TIMEOUT}s"
+        exit 5
+    fi
+    output_result "DRIVER_RELOAD" "PASS"
+
+    # Step 7: Verify interface MAC
+    local interface_mac
+    interface_mac=$(verify_interface_mac "$mac_normalized") || {
+        output_result "MAC_INTERFACE" "$interface_mac"
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "Interface MAC mismatch: expected ${mac_normalized}, got ${interface_mac}"
+        exit 6
+    }
+    output_result "MAC_INTERFACE" "$interface_mac"
+
+    # Step 8: WiFi connection test (optional)
+    if [[ -n "$test_ssid" && -n "$test_password" ]]; then
+        local ip
+        ip=$(wifi_connect_test "$test_ssid" "$test_password") || {
+            output_result "WIFI_CONNECT" "FAIL"
+            output_result "IP_OBTAINED" "NONE"
+            output_result "RESULT" "FAIL"
+            output_result "ERROR" "WiFi connection test failed"
+            exit 7
+        }
+        output_result "WIFI_CONNECT" "PASS"
+        output_result "IP_OBTAINED" "$ip"
+    else
+        output_result "WIFI_CONNECT" "SKIP"
+        output_result "IP_OBTAINED" "SKIP"
+    fi
+
+    # All passed
+    output_result "RESULT" "PASS"
+    exit 0
+}
+
+main "$@"
