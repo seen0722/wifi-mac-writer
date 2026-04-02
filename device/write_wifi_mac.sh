@@ -120,25 +120,30 @@ wait_for_framework() {
 update_framework_mac() {
     local mac_coloned="$1"
 
-    # If WifiConfigStore.xml doesn't exist yet (first boot, never connected WiFi),
-    # restart framework to generate it
+    # First boot: XML doesn't exist yet. No action needed — when framework
+    # initializes WiFi for the first time, it reads factory MAC from driver,
+    # which already has the correct MAC from wlan_mac.bin.
     if [ ! -f "${WIFI_CONFIG_STORE}" ]; then
-        stop
-        start
-        wait_for_framework
-
-        # Still doesn't exist — skip framework MAC update (not fatal)
-        if [ ! -f "${WIFI_CONFIG_STORE}" ]; then
-            return 0
-        fi
+        echo "SKIP_FIRST_BOOT"
+        return 0
     fi
 
     local old_mac
     old_mac=$(grep 'wifi_sta_factory_mac_address' "${WIFI_CONFIG_STORE}" | \
         sed 's/.*>\(.*\)<.*/\1/')
 
-    # If tag not found in XML, skip (framework will pick up MAC from driver on next boot)
+    # Tag not found — same logic, framework will pick up from driver
     if [ -z "$old_mac" ]; then
+        echo "SKIP_NO_TAG"
+        return 0
+    fi
+
+    # MAC already correct, no restart needed
+    local expected_lower
+    expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
+    local old_lower
+    old_lower=$(echo "$old_mac" | tr '[:upper:]' '[:lower:]')
+    if [ "$old_lower" = "$expected_lower" ]; then
         return 0
     fi
 
@@ -296,20 +301,33 @@ main() {
     # Step 7: Update framework factory MAC
     local mac_coloned
     mac_coloned=$(format_mac_coloned "$mac_normalized")
-    if ! update_framework_mac "$mac_coloned"; then
+    local fw_result
+    fw_result=$(update_framework_mac "$mac_coloned")
+    if [ $? -ne 0 ]; then
         output_result "FRAMEWORK_MAC" "FAIL"
         output_result "RESULT" "FAIL"
         output_result "ERROR" "Failed to update WifiConfigStore.xml"
         exit 8
     fi
 
-    if ! verify_framework_mac "$mac_coloned"; then
-        output_result "FRAMEWORK_MAC" "FAIL"
-        output_result "RESULT" "FAIL"
-        output_result "ERROR" "Framework factory MAC verification failed"
-        exit 8
-    fi
-    output_result "FRAMEWORK_MAC" "PASS"
+    case "$fw_result" in
+        SKIP_FIRST_BOOT)
+            # First boot: XML doesn't exist. Framework will auto-pick up MAC from driver.
+            output_result "FRAMEWORK_MAC" "SKIP_FIRST_BOOT"
+            ;;
+        SKIP_NO_TAG)
+            output_result "FRAMEWORK_MAC" "SKIP_NO_TAG"
+            ;;
+        *)
+            if ! verify_framework_mac "$mac_coloned"; then
+                output_result "FRAMEWORK_MAC" "FAIL"
+                output_result "RESULT" "FAIL"
+                output_result "ERROR" "Framework factory MAC verification failed"
+                exit 8
+            fi
+            output_result "FRAMEWORK_MAC" "PASS"
+            ;;
+    esac
 
     # Step 8: WiFi connection test (optional)
     if [ -n "$test_ssid" ] && [ -n "$test_password" ]; then
