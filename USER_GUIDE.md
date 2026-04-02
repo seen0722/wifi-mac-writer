@@ -160,7 +160,7 @@ ERROR=Framework factory MAC verification failed
 | 5 | Driver reload failed | Check wlan module path; reboot device and retry |
 | 6 | Interface MAC mismatch | Check locally administered bit (see above) |
 | 7 | WiFi connection test failed | Check test AP SSID/password; check AP is powered on |
-| 8 | Framework MAC update failed | Check WifiConfigStore.xml exists; retry after full reboot |
+| 8 | Framework MAC update failed | Retry after full reboot (`adb reboot`) |
 
 ---
 
@@ -172,12 +172,18 @@ ERROR=Framework factory MAC verification failed
 4. **Reloads** the WiFi driver (`rmmod wlan` + `insmod qca_cld3_qca6750.ko`)
 5. **Waits** for the `wlan0` interface to come up (up to 10 seconds)
 6. **Verifies** the interface MAC matches what was written
-7. **Updates** `wifi_sta_factory_mac_address` in `WifiConfigStore.xml` (so Settings UI shows the correct MAC)
-8. **Restarts** the Android framework (`stop` / `start`) and waits for it to be ready
-9. **Verifies** the framework reports the correct factory MAC
-10. **(Optional)** Connects to a test WiFi AP and verifies IP assignment
+7. **Updates framework factory MAC:** Deletes `WifiConfigStore.xml`, restarts Android framework, enables WiFi — framework reads correct MAC from driver and rebuilds XML automatically. If MAC is already correct, this step is skipped (~5s vs ~25s).
+8. **Verifies** the framework reports the correct factory MAC via `dumpsys wifi`
+9. **(Optional)** Connects to a test WiFi AP and verifies IP assignment
 
 The MAC persists across factory reset (stored on persist partition).
+
+### Timing
+
+| Scenario | Duration |
+|----------|----------|
+| First write or MAC change | ~25 seconds |
+| Same MAC (re-run) | ~5 seconds |
 
 ---
 
@@ -212,13 +218,14 @@ adb shell cat /mnt/vendor/persist/qca6750/wlan_mac.bin
 ### "Framework MAC update failed" (exit code 8)
 
 ```bash
-# Check if WifiConfigStore.xml exists
-adb shell ls -la /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml
+# Enable WiFi first — factory_mac only appears after WiFi is enabled
+adb shell cmd wifi set-wifi-enabled enabled
+sleep 10
 
 # Check current framework factory MAC
 adb shell dumpsys wifi | grep factory_mac
 
-# If file missing, reboot device fully and retry
+# If still wrong, full reboot and retry
 adb reboot
 ```
 

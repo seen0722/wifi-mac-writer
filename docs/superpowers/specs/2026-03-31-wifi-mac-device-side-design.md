@@ -83,21 +83,31 @@ adb shell write_wifi_mac.sh AA:BB:CC:DD:EE:FF TEST_SSID TEST_PASSWORD
 - ADB 重連邏輯
 - `check_adb_connection()` 函式
 
-### Framework Restart 後的等待邏輯
+### Framework MAC 更新策略
+
+不直接修改 `WifiConfigStore.xml`，而是刪除它讓 framework 重建：
+
+1. 若 XML 中的 MAC 已正確 → 跳過 framework restart（~5 秒）
+2. 否則：刪除 XML → restart framework → 等待 `boot_completed` → 等待 WiFi service 就緒 → 開啟 WiFi → framework 自動從 driver 讀取正確 MAC 並重建 XML → 驗證
 
 ```bash
+# 刪除 XML（強制 framework 重建）
+rm "${WIFI_CONFIG_STORE}"
+
+# Restart framework（清除記憶體中的 factory MAC 快取）
 stop; start
 
-# 本地輪詢等待 framework 就緒
-local retries=0
-while [[ $retries -lt 30 ]]; do
-    if getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
-        break
-    fi
-    sleep 1
-    ((retries++))
-done
+# 等待 boot_completed
+while ...; do getprop sys.boot_completed; done
+
+# 等待 WiFi service 就緒（boot_completed 後仍需 5-10 秒）
+while ...; do cmd wifi status; done
+
+# 開啟 WiFi（觸發 framework 從 driver 讀取 factory MAC 並生成 XML）
+cmd wifi set-wifi-enabled enabled
 ```
+
+**重要發現：** `boot_completed=1` 不代表所有 service 就緒，WiFi service 需要額外等待 5-10 秒。`factory_mac` 只有在 WiFi 啟用後才出現在 `dumpsys wifi` 中。
 
 ## 流程
 
@@ -108,11 +118,17 @@ done
 5. 重載 wlan driver（`rmmod wlan` + `insmod qca_cld3_qca6750.ko`）
 6. 等待 wlan0 介面出現（最多 10 秒）
 7. 讀取 wlan0 MAC，比對是否一致
-8. 更新 WifiConfigStore.xml 中的 `wifi_sta_factory_mac_address`
-9. 重啟 framework（`stop; start`），等待就緒
-10. 驗證 `dumpsys wifi` 中的 factory MAC
-11. （可選）WiFi 連線測試
-12. 輸出結果
+8. 更新 framework factory MAC（刪除 XML → restart framework → 開 WiFi → 等 framework 重建 XML）
+9. 驗證 `dumpsys wifi` 中的 factory MAC
+10. （可選）WiFi 連線測試
+11. 輸出結果
+
+### 耗時參考
+
+| 場景 | 耗時 |
+|------|------|
+| XML 不存在或 MAC 不同 | ~25 秒 |
+| MAC 已相同（跳過 framework restart） | ~5 秒 |
 
 ## 退出碼
 
@@ -177,3 +193,5 @@ PRODUCT_COPY_FILES += \
 - **Locally Administered Bit：** QCA6750 驅動會清除 MAC 第一個 byte 的 bit 1（IEEE locally administered bit）。從 OUI block 分配的正式 MAC 不受影響。
 - **wlan module 路徑：** 實際模組路徑為 `/vendor/lib/modules/qca_cld3_qca6750.ko`，不同 BSP 版本可能路徑不同。
 - **framework restart：** `stop; start` 會重啟所有 Android 服務，生產線上不會有使用者影響。
+- **WiFi service 就緒延遲：** `boot_completed=1` 後 WiFi service 仍需 5-10 秒才就緒，腳本會輪詢等待。
+- **factory_mac 快取：** Android framework 會快取 factory MAC，僅 restart framework 才能清除。單純 reload WiFi driver 不會更新 framework 快取。
