@@ -120,21 +120,34 @@ wait_for_framework() {
 update_framework_mac() {
     local mac_coloned="$1"
 
-    # First boot: XML doesn't exist yet. No action needed — when framework
-    # initializes WiFi for the first time, it reads factory MAC from driver,
-    # which already has the correct MAC from wlan_mac.bin.
     if [ ! -f "${WIFI_CONFIG_STORE}" ]; then
-        echo "SKIP_FIRST_BOOT"
-        return 0
+        # XML doesn't exist — restart framework to clear factory MAC cache
+        # and let it regenerate XML with correct MAC from driver
+        stop
+        start
+        wait_for_framework
+
+        # After restart, wait for XML to be generated
+        local wait=0
+        while [ $wait -lt 10 ]; do
+            if [ -f "${WIFI_CONFIG_STORE}" ]; then
+                break
+            fi
+            sleep 1
+            wait=$((wait + 1))
+        done
+
+        # If XML exists now, update it; otherwise driver MAC will be used
+        if [ ! -f "${WIFI_CONFIG_STORE}" ]; then
+            return 0
+        fi
     fi
 
     local old_mac
     old_mac=$(grep 'wifi_sta_factory_mac_address' "${WIFI_CONFIG_STORE}" | \
         sed 's/.*>\(.*\)<.*/\1/')
 
-    # Tag not found — same logic, framework will pick up from driver
     if [ -z "$old_mac" ]; then
-        echo "SKIP_NO_TAG"
         return 0
     fi
 
@@ -149,7 +162,7 @@ update_framework_mac() {
 
     sed -i "s/${old_mac}/${mac_coloned}/g" "${WIFI_CONFIG_STORE}" || return 1
 
-    # Restart Android framework to reload the config
+    # Restart framework again to pick up the updated XML
     stop
     start
     wait_for_framework
@@ -161,6 +174,10 @@ verify_framework_mac() {
     local expected_lower
     expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
 
+    # Ensure WiFi is enabled — factory_mac only appears in dumpsys after WiFi starts
+    cmd wifi set-wifi-enabled enabled 2>/dev/null || true
+    sleep 3
+
     # Retry a few times — dumpsys wifi may briefly fail after framework restart
     local attempt=0
     while [ $attempt -lt 5 ]; do
@@ -168,11 +185,14 @@ verify_framework_mac() {
         factory_mac=$(dumpsys wifi 2>/dev/null | grep wifi_sta_factory_mac_address | \
             sed 's/.*=//' | tr '[:upper:]' '[:lower:]')
         if [ "$factory_mac" = "$expected_lower" ]; then
+            # Disable WiFi after verification
+            cmd wifi set-wifi-enabled disabled 2>/dev/null || true
             return 0
         fi
         sleep 2
         attempt=$((attempt + 1))
     done
+    cmd wifi set-wifi-enabled disabled 2>/dev/null || true
     echo "$factory_mac"
     return 1
 }
@@ -301,33 +321,20 @@ main() {
     # Step 7: Update framework factory MAC
     local mac_coloned
     mac_coloned=$(format_mac_coloned "$mac_normalized")
-    local fw_result
-    fw_result=$(update_framework_mac "$mac_coloned")
-    if [ $? -ne 0 ]; then
+    if ! update_framework_mac "$mac_coloned"; then
         output_result "FRAMEWORK_MAC" "FAIL"
         output_result "RESULT" "FAIL"
         output_result "ERROR" "Failed to update WifiConfigStore.xml"
         exit 8
     fi
 
-    case "$fw_result" in
-        SKIP_FIRST_BOOT)
-            # First boot: XML doesn't exist. Framework will auto-pick up MAC from driver.
-            output_result "FRAMEWORK_MAC" "SKIP_FIRST_BOOT"
-            ;;
-        SKIP_NO_TAG)
-            output_result "FRAMEWORK_MAC" "SKIP_NO_TAG"
-            ;;
-        *)
-            if ! verify_framework_mac "$mac_coloned"; then
-                output_result "FRAMEWORK_MAC" "FAIL"
-                output_result "RESULT" "FAIL"
-                output_result "ERROR" "Framework factory MAC verification failed"
-                exit 8
-            fi
-            output_result "FRAMEWORK_MAC" "PASS"
-            ;;
-    esac
+    if ! verify_framework_mac "$mac_coloned"; then
+        output_result "FRAMEWORK_MAC" "FAIL"
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "Framework factory MAC verification failed"
+        exit 8
+    fi
+    output_result "FRAMEWORK_MAC" "PASS"
 
     # Step 8: WiFi connection test (optional)
     if [ -n "$test_ssid" ] && [ -n "$test_password" ]; then
