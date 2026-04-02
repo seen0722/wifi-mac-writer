@@ -157,9 +157,9 @@ verify_framework_mac() {
 
     # WiFi was enabled by update_framework_mac.
     # factory_mac appears after WifiService fully initializes the driver.
+    local factory_mac=""
     local attempt=0
     while [ $attempt -lt 10 ]; do
-        local factory_mac
         factory_mac=$(dumpsys wifi 2>/dev/null | grep wifi_sta_factory_mac_address | \
             sed 's/.*=//' | tr '[:upper:]' '[:lower:]')
         if [ "$factory_mac" = "$expected_lower" ]; then

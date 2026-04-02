@@ -62,6 +62,7 @@ Check `RESULT` field: `PASS` = success, `FAIL` = see `ERROR` field.
 | Code | Meaning |
 |------|---------|
 | 0 | All passed |
+| 1 | ADB connection failed (host-side only) |
 | 2 | Invalid MAC format |
 | 3 | Write failed |
 | 4 | Read-back mismatch |

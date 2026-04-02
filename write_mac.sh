@@ -185,50 +185,59 @@ wait_for_adb_framework() {
 update_framework_mac() {
     local mac_coloned="$1"
 
-    # First boot: XML doesn't exist. No action needed — framework will
-    # read factory MAC from driver (which has correct MAC from wlan_mac.bin).
+    # Check if XML already has the correct MAC — skip restart entirely
     local file_exists
     file_exists=$(adb shell "[ -f ${WIFI_CONFIG_STORE} ] && echo yes || echo no" | tr -d '\r')
-    if [[ "$file_exists" != "yes" ]]; then
-        echo "SKIP_FIRST_BOOT"
-        return 0
+    if [[ "$file_exists" == "yes" ]]; then
+        local current_mac
+        current_mac=$(adb shell "grep 'wifi_sta_factory_mac_address' ${WIFI_CONFIG_STORE}" | \
+            sed 's/.*>\(.*\)<.*/\1/' | tr -d '\r' | tr '[:upper:]' '[:lower:]')
+        local expected_lower
+        expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
+        if [[ "$current_mac" == "$expected_lower" ]]; then
+            return 0
+        fi
+        # Delete XML — framework will rebuild with correct MAC from driver
+        adb shell "rm ${WIFI_CONFIG_STORE}"
     fi
 
-    local old_mac
-    old_mac=$(adb shell "grep 'wifi_sta_factory_mac_address' ${WIFI_CONFIG_STORE}" | \
-        sed 's/.*>\(.*\)<.*/\1/' | tr -d '\r')
-
-    if [[ -z "$old_mac" ]]; then
-        echo "SKIP_NO_TAG"
-        return 0
-    fi
-
-    # MAC already correct, no restart needed
-    local expected_lower old_lower
-    expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
-    old_lower=$(echo "$old_mac" | tr '[:upper:]' '[:lower:]')
-    if [[ "$old_lower" == "$expected_lower" ]]; then
-        return 0
-    fi
-
-    adb shell "sed -i 's/${old_mac}/${mac_coloned}/g' ${WIFI_CONFIG_STORE}" || return 1
-
-    # Restart Android framework to reload the config
+    # Restart framework to clear factory MAC cache
     adb shell "stop; start" || return 1
     wait_for_adb_framework
+
+    # Wait for WiFi service to be ready, then enable WiFi
+    local wifi_retries=0
+    while [[ $wifi_retries -lt 20 ]]; do
+        if adb shell "cmd wifi status" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+        ((wifi_retries++))
+    done
+    adb shell "cmd wifi set-wifi-enabled enabled" 2>/dev/null || true
     return 0
 }
 
 verify_framework_mac() {
     local mac_coloned="$1"
-    local factory_mac
-    factory_mac=$(adb shell "dumpsys wifi | grep wifi_sta_factory_mac_address" | \
-        sed 's/.*=//' | tr -d '\r' | tr '[:upper:]' '[:lower:]') || return 1
     local expected_lower
     expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
-    if [[ "$factory_mac" == "$expected_lower" ]]; then
-        return 0
-    fi
+
+    # WiFi was enabled by update_framework_mac.
+    # factory_mac appears after WifiService fully initializes the driver.
+    local factory_mac=""
+    local attempt=0
+    while [[ $attempt -lt 10 ]]; do
+        factory_mac=$(adb shell "dumpsys wifi | grep wifi_sta_factory_mac_address" | \
+            sed 's/.*=//' | tr -d '\r' | tr '[:upper:]' '[:lower:]')
+        if [[ "$factory_mac" == "$expected_lower" ]]; then
+            adb shell "cmd wifi set-wifi-enabled disabled" 2>/dev/null || true
+            return 0
+        fi
+        sleep 2
+        ((attempt++))
+    done
+    adb shell "cmd wifi set-wifi-enabled disabled" 2>/dev/null || true
     echo "$factory_mac"
     return 1
 }
@@ -329,31 +338,20 @@ main() {
     # Step 8: Update framework factory MAC in WifiConfigStore.xml
     local mac_coloned
     mac_coloned=$(echo "$mac_normalized" | sed 's/\(..\)/\1:/g; s/:$//' | tr '[:upper:]' '[:lower:]')
-    local fw_result
-    if ! fw_result=$(update_framework_mac "$mac_coloned"); then
+    if ! update_framework_mac "$mac_coloned"; then
         output_result "FRAMEWORK_MAC" "FAIL"
         output_result "RESULT" "FAIL"
         output_result "ERROR" "Failed to update WifiConfigStore.xml"
         exit 8
     fi
 
-    case "$fw_result" in
-        SKIP_FIRST_BOOT)
-            output_result "FRAMEWORK_MAC" "SKIP_FIRST_BOOT"
-            ;;
-        SKIP_NO_TAG)
-            output_result "FRAMEWORK_MAC" "SKIP_NO_TAG"
-            ;;
-        *)
-            if ! verify_framework_mac "$mac_coloned"; then
-                output_result "FRAMEWORK_MAC" "FAIL"
-                output_result "RESULT" "FAIL"
-                output_result "ERROR" "Framework factory MAC verification failed"
-                exit 8
-            fi
-            output_result "FRAMEWORK_MAC" "PASS"
-            ;;
-    esac
+    if ! verify_framework_mac "$mac_coloned"; then
+        output_result "FRAMEWORK_MAC" "FAIL"
+        output_result "RESULT" "FAIL"
+        output_result "ERROR" "Framework factory MAC verification failed"
+        exit 8
+    fi
+    output_result "FRAMEWORK_MAC" "PASS"
 
     # Step 9: WiFi connection test (optional)
     if [[ -n "$test_ssid" && -n "$test_password" ]]; then
@@ -363,7 +361,7 @@ main() {
             output_result "IP_OBTAINED" "NONE"
             output_result "RESULT" "FAIL"
             output_result "ERROR" "WiFi connection test failed"
-            exit 9
+            exit 7
         }
         output_result "WIFI_CONNECT" "PASS"
         output_result "IP_OBTAINED" "$ip"

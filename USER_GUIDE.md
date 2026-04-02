@@ -154,6 +154,7 @@ ERROR=Framework factory MAC verification failed
 | Code | Meaning | Action |
 |------|---------|--------|
 | 0 | All passed | None |
+| 1 | ADB connection failed (host-side only) | Check USB cable and ADB authorization |
 | 2 | Invalid MAC format | Check MAC address format |
 | 3 | Write failed | Check persist partition is mounted rw |
 | 4 | Read-back mismatch | Re-run; if persistent, check storage |
