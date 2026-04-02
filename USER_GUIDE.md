@@ -167,17 +167,23 @@ ERROR=Framework factory MAC verification failed
 
 ## What the Tool Does (Step by Step)
 
-1. **Checks ADB connection** (host-side only) / Gets device serial
-2. **Validates** the MAC address format
-3. **Backs up** original MAC file to PC (host-side only)
-4. **Writes** `Intf0MacAddress=<MAC>` to `/mnt/vendor/persist/qca6750/wlan_mac.bin`
-5. **Reads back** the file to verify it was written correctly
-6. **Reloads** the WiFi driver (`rmmod wlan` + `insmod qca_cld3_qca6750.ko`)
-7. **Waits** for the `wlan0` interface to come up (up to 10 seconds)
-8. **Verifies** the interface MAC matches what was written
-9. **Updates framework factory MAC:** Deletes `WifiConfigStore.xml`, restarts Android framework, enables WiFi — framework reads correct MAC from driver and rebuilds XML automatically. If MAC is already correct, this step is skipped (~5s vs ~25s).
-10. **Verifies** the framework reports the correct factory MAC via `dumpsys wifi`
-11. **(Optional)** Connects to a test WiFi AP and verifies IP assignment
+**Device-side (`write_wifi_mac.sh`):**
+
+1. **Validates** the MAC address format
+2. **Gets device serial** via `getprop ro.serialno`
+3. **Writes** `Intf0MacAddress=<MAC>` to `/mnt/vendor/persist/qca6750/wlan_mac.bin`
+4. **Reads back** the file to verify it was written correctly
+5. **Reloads** the WiFi driver (`rmmod wlan` + `insmod qca_cld3_qca6750.ko`)
+6. **Waits** for the `wlan0` interface to come up (up to 10 seconds)
+7. **Verifies** the interface MAC matches what was written
+8. **Updates framework factory MAC:** Deletes `WifiConfigStore.xml`, restarts Android framework, waits for WiFi service ready, enables WiFi — framework reads correct MAC from driver and rebuilds XML automatically. If MAC is already correct, this step is skipped.
+9. **Verifies** the framework reports the correct factory MAC via `dumpsys wifi`
+10. **(Optional)** Connects to a test WiFi AP and verifies IP assignment
+
+**Host-side (`write_mac.sh`) additional steps:**
+
+- Step 1 is preceded by **ADB connection check** (`adb get-serialno`)
+- **Backs up** original MAC file to PC (`backups/` directory) before writing
 
 The MAC persists across factory reset (stored on persist partition).
 
