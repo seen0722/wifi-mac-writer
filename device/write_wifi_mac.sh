@@ -105,23 +105,7 @@ verify_interface_mac() {
     return 1
 }
 
-update_framework_mac() {
-    local mac_coloned="$1"
-    local old_mac
-    old_mac=$(grep 'wifi_sta_factory_mac_address' "${WIFI_CONFIG_STORE}" | \
-        sed 's/.*>\(.*\)<.*/\1/') || return 1
-
-    if [ -z "$old_mac" ]; then
-        return 1
-    fi
-
-    sed -i "s/${old_mac}/${mac_coloned}/g" "${WIFI_CONFIG_STORE}" || return 1
-
-    # Restart Android framework
-    stop
-    start
-
-    # Wait for framework to be ready (local polling, no ADB needed)
+wait_for_framework() {
     local retries=0
     while [ $retries -lt 30 ]; do
         if getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
@@ -131,6 +115,39 @@ update_framework_mac() {
         retries=$((retries + 1))
     done
     sleep "$FRAMEWORK_RESTART_WAIT"
+}
+
+update_framework_mac() {
+    local mac_coloned="$1"
+
+    # If WifiConfigStore.xml doesn't exist yet (first boot, never connected WiFi),
+    # restart framework to generate it
+    if [ ! -f "${WIFI_CONFIG_STORE}" ]; then
+        stop
+        start
+        wait_for_framework
+
+        # Still doesn't exist — skip framework MAC update (not fatal)
+        if [ ! -f "${WIFI_CONFIG_STORE}" ]; then
+            return 0
+        fi
+    fi
+
+    local old_mac
+    old_mac=$(grep 'wifi_sta_factory_mac_address' "${WIFI_CONFIG_STORE}" | \
+        sed 's/.*>\(.*\)<.*/\1/')
+
+    # If tag not found in XML, skip (framework will pick up MAC from driver on next boot)
+    if [ -z "$old_mac" ]; then
+        return 0
+    fi
+
+    sed -i "s/${old_mac}/${mac_coloned}/g" "${WIFI_CONFIG_STORE}" || return 1
+
+    # Restart Android framework to reload the config
+    stop
+    start
+    wait_for_framework
     return 0
 }
 

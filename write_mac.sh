@@ -169,27 +169,9 @@ wifi_cleanup() {
     adb shell "cmd wifi set-wifi-enabled disabled" 2>/dev/null || true
 }
 
-update_framework_mac() {
-    local mac_coloned="$1"
-    # Update wifi_sta_factory_mac_address in WifiConfigStore.xml
-    local old_mac
-    old_mac=$(adb shell "grep 'wifi_sta_factory_mac_address' ${WIFI_CONFIG_STORE}" | \
-        sed 's/.*>\(.*\)<.*/\1/' | tr -d '\r') || return 1
-
-    if [[ -z "$old_mac" ]]; then
-        return 1
-    fi
-
-    adb shell "sed -i 's/${old_mac}/${mac_coloned}/g' ${WIFI_CONFIG_STORE}" || return 1
-
-    # Restart Android framework to reload the config
-    adb shell "stop; start" || return 1
-
-    # Wait for ADB to reconnect after framework restart
+wait_for_adb_framework() {
     adb wait-for-device 2>/dev/null || true
     sleep "$FRAMEWORK_RESTART_WAIT"
-
-    # Ensure ADB is fully ready
     local retries=0
     while [[ $retries -lt 5 ]]; do
         if adb shell "getprop sys.boot_completed" 2>/dev/null | grep -q "1"; then
@@ -198,6 +180,38 @@ update_framework_mac() {
         sleep 2
         ((retries++))
     done
+}
+
+update_framework_mac() {
+    local mac_coloned="$1"
+
+    # If WifiConfigStore.xml doesn't exist yet (first boot, never connected WiFi),
+    # restart framework to generate it
+    local file_exists
+    file_exists=$(adb shell "[ -f ${WIFI_CONFIG_STORE} ] && echo yes || echo no" | tr -d '\r')
+    if [[ "$file_exists" != "yes" ]]; then
+        adb shell "stop; start" || return 1
+        wait_for_adb_framework
+
+        file_exists=$(adb shell "[ -f ${WIFI_CONFIG_STORE} ] && echo yes || echo no" | tr -d '\r')
+        if [[ "$file_exists" != "yes" ]]; then
+            return 0
+        fi
+    fi
+
+    local old_mac
+    old_mac=$(adb shell "grep 'wifi_sta_factory_mac_address' ${WIFI_CONFIG_STORE}" | \
+        sed 's/.*>\(.*\)<.*/\1/' | tr -d '\r')
+
+    if [[ -z "$old_mac" ]]; then
+        return 0
+    fi
+
+    adb shell "sed -i 's/${old_mac}/${mac_coloned}/g' ${WIFI_CONFIG_STORE}" || return 1
+
+    # Restart Android framework to reload the config
+    adb shell "stop; start" || return 1
+    wait_for_adb_framework
     return 0
 }
 
