@@ -11,7 +11,6 @@ DRIVER_RELOAD_WAIT=1
 WLAN_UP_TIMEOUT=10
 WIFI_CONNECT_TIMEOUT=15
 WIFI_CONFIG_STORE="/data/misc/apexdata/com.android.wifi/WifiConfigStore.xml"
-FRAMEWORK_RESTART_WAIT=10
 
 # --- Helper Functions ---
 
@@ -105,7 +104,27 @@ verify_interface_mac() {
     return 1
 }
 
-wait_for_framework() {
+update_framework_mac() {
+    local mac_coloned="$1"
+
+    # Check if XML already has the correct MAC — skip restart entirely
+    if [ -f "${WIFI_CONFIG_STORE}" ]; then
+        local current_mac
+        current_mac=$(grep 'wifi_sta_factory_mac_address' "${WIFI_CONFIG_STORE}" | \
+            sed 's/.*>\(.*\)<.*/\1/' | tr '[:upper:]' '[:lower:]')
+        local expected_lower
+        expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
+        if [ "$current_mac" = "$expected_lower" ]; then
+            return 0
+        fi
+        rm "${WIFI_CONFIG_STORE}"
+    fi
+
+    # Step 2: Restart framework to clear factory MAC cache in memory
+    stop
+    start
+
+    # Wait for boot_completed
     local retries=0
     while [ $retries -lt 30 ]; do
         if getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
@@ -114,58 +133,20 @@ wait_for_framework() {
         sleep 1
         retries=$((retries + 1))
     done
-    sleep "$FRAMEWORK_RESTART_WAIT"
-}
 
-update_framework_mac() {
-    local mac_coloned="$1"
-
-    if [ ! -f "${WIFI_CONFIG_STORE}" ]; then
-        # XML doesn't exist — restart framework to clear factory MAC cache
-        # and let it regenerate XML with correct MAC from driver
-        stop
-        start
-        wait_for_framework
-
-        # After restart, wait for XML to be generated
-        local wait=0
-        while [ $wait -lt 10 ]; do
-            if [ -f "${WIFI_CONFIG_STORE}" ]; then
-                break
-            fi
-            sleep 1
-            wait=$((wait + 1))
-        done
-
-        # If XML exists now, update it; otherwise driver MAC will be used
-        if [ ! -f "${WIFI_CONFIG_STORE}" ]; then
-            return 0
+    # Step 3: Wait for WiFi service to be ready (can take 5-10s after boot_completed)
+    local wifi_retries=0
+    while [ $wifi_retries -lt 20 ]; do
+        if cmd wifi status >/dev/null 2>&1; then
+            break
         fi
-    fi
+        sleep 1
+        wifi_retries=$((wifi_retries + 1))
+    done
 
-    local old_mac
-    old_mac=$(grep 'wifi_sta_factory_mac_address' "${WIFI_CONFIG_STORE}" | \
-        sed 's/.*>\(.*\)<.*/\1/')
-
-    if [ -z "$old_mac" ]; then
-        return 0
-    fi
-
-    # MAC already correct, no restart needed
-    local expected_lower
-    expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
-    local old_lower
-    old_lower=$(echo "$old_mac" | tr '[:upper:]' '[:lower:]')
-    if [ "$old_lower" = "$expected_lower" ]; then
-        return 0
-    fi
-
-    sed -i "s/${old_mac}/${mac_coloned}/g" "${WIFI_CONFIG_STORE}" || return 1
-
-    # Restart framework again to pick up the updated XML
-    stop
-    start
-    wait_for_framework
+    # Enable WiFi — triggers framework to read factory MAC from driver
+    # and create a fresh WifiConfigStore.xml with the correct MAC
+    cmd wifi set-wifi-enabled enabled 2>/dev/null || true
     return 0
 }
 
@@ -174,18 +155,14 @@ verify_framework_mac() {
     local expected_lower
     expected_lower=$(echo "$mac_coloned" | tr '[:upper:]' '[:lower:]')
 
-    # Ensure WiFi is enabled — factory_mac only appears in dumpsys after WiFi starts
-    cmd wifi set-wifi-enabled enabled 2>/dev/null || true
-    sleep 3
-
-    # Retry a few times — dumpsys wifi may briefly fail after framework restart
+    # WiFi was enabled by update_framework_mac.
+    # factory_mac appears after WifiService fully initializes the driver.
     local attempt=0
-    while [ $attempt -lt 5 ]; do
+    while [ $attempt -lt 10 ]; do
         local factory_mac
         factory_mac=$(dumpsys wifi 2>/dev/null | grep wifi_sta_factory_mac_address | \
             sed 's/.*=//' | tr '[:upper:]' '[:lower:]')
         if [ "$factory_mac" = "$expected_lower" ]; then
-            # Disable WiFi after verification
             cmd wifi set-wifi-enabled disabled 2>/dev/null || true
             return 0
         fi
