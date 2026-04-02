@@ -54,8 +54,10 @@ write_mac.sh <MAC_ADDRESS> [TEST_AP_SSID] [TEST_AP_PASSWORD]
 6. 重載 wlan driver（rmmod + insmod）
 7. 等待 wlan0 介面出現
 8. 讀取 wlan0 MAC，比對是否一致
-9. （可選）連線測試 AP，確認能取得 IP
-10. 輸出結果
+9. 更新 framework factory MAC（刪除 WifiConfigStore.xml → restart framework → 開 WiFi → framework 自動重建 XML）
+10. 驗證 `dumpsys wifi` 中的 factory MAC
+11. （可選）連線測試 AP，確認能取得 IP
+12. 輸出結果
 
 ### 退出碼
 
@@ -69,6 +71,7 @@ write_mac.sh <MAC_ADDRESS> [TEST_AP_SSID] [TEST_AP_PASSWORD]
 | 5 | driver 重載失敗 |
 | 6 | MAC 比對失敗 |
 | 7 | WiFi 連線測試失敗 |
+| 8 | framework MAC 更新失敗 |
 
 ## wlan_mac.bin 寫入細節
 
@@ -128,6 +131,9 @@ write_mac.sh <MAC_ADDRESS> [TEST_AP_SSID] [TEST_AP_PASSWORD]
 
 - **Locally Administered Bit：** QCA6750 驅動會清除 MAC 第一個 byte 的 bit 1（IEEE locally administered bit）。從 OUI block 分配的正式 MAC 不受影響（bit 1 本來就是 0），但若使用 `AA:BB:CC:DD:EE:FF` 等測試地址可能導致驗證失敗。
 - **wlan module 路徑：** 實際模組路徑為 `/vendor/lib/modules/qca_cld3_qca6750.ko`，非通用的 `wlan.ko`。不同 BSP 版本可能路徑不同。
+- **WiFi service 就緒延遲：** `boot_completed=1` 後 WiFi service 仍需 5-10 秒才就緒。
+- **factory_mac 快取：** Android framework 會快取 factory MAC，僅 restart framework 才能清除。
+- **Framework MAC 更新策略：** 採用刪除 WifiConfigStore.xml + restart framework + 開 WiFi 方式，讓 framework 自動從 driver 重建正確的 XML。若 MAC 已正確則跳過 restart。
 
 ## 輸出格式
 
